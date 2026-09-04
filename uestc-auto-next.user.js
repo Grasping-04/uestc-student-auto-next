@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UESTC 自动点击下一节
 // @namespace    local.uestc.learning-helper
-// @version      0.7.1
+// @version      0.8.0
 // @description  视频真实播放结束后，自动进入并尝试播放下一课件。
 // @match        https://resource.uestc.edu.cn/*
 // @run-at       document-idle
@@ -21,6 +21,9 @@
   const LOG_PREFIX = '[UESTC Auto Next]';
   const ENABLED_KEY = 'uestc_auto_next_enabled';
   const BG_KEEP_PLAYING_KEY = 'uestc_bg_keep_playing';
+  const SPEED_LOCK_KEY = 'uestc_speed_lock';
+  const LOCKED_PLAYBACK_RATE = 2;
+  const LOGO_URL = 'https://cdn.jsdelivr.net/gh/Grasping-04/uestc-student-auto-next@main/university-of-electronic-science-and-technology-of-china-logo-1024px.png';
   const NAVIGATION_DELAY_MS = 1500;
   const AUTO_PLAY_TIMEOUT_MS = 15000;
   const VIDEO_ENDED_MESSAGE = 'UESTC_AUTO_NEXT_VIDEO_ENDED';
@@ -78,6 +81,7 @@
 
   let enabled = GM_getValue(ENABLED_KEY, true);
   let bgKeepPlaying = GM_getValue(BG_KEEP_PLAYING_KEY, true);
+  let speedLock = GM_getValue(SPEED_LOCK_KEY, true);
   let navigationPending = false;
   let autoPlayPending = false;
   let manualPlayNeeded = false;
@@ -85,49 +89,254 @@
   let autoPlayAttemptRunning = false;
   let lastEndedVideo = null;
   let lastEndedSrc = '';
-  let statusBadge = null;
+  const ui = { root: null, panel: null, statusEl: null, dot: null, toggles: {} };
   const boundVideos = new WeakSet();
   const videosPlayingWhenHidden = new Set();
 
   const log = (...args) => console.info(LOG_PREFIX, ...args);
 
+  function createToggle(labelText, initialValue, onChange) {
+    const row = document.createElement('label');
+    Object.assign(row.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '9px 0',
+      cursor: 'pointer',
+      userSelect: 'none'
+    });
+
+    const label = document.createElement('span');
+    label.textContent = labelText;
+    Object.assign(label.style, { fontSize: '13px', color: '#333' });
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = initialValue;
+    input.style.cssText = 'display:none';
+
+    const track = document.createElement('span');
+    Object.assign(track.style, {
+      position: 'relative',
+      width: '40px',
+      height: '22px',
+      borderRadius: '11px',
+      background: '#ccc',
+      flexShrink: '0',
+      transition: 'background .2s ease'
+    });
+
+    const thumb = document.createElement('span');
+    Object.assign(thumb.style, {
+      position: 'absolute',
+      top: '2px',
+      left: '2px',
+      width: '18px',
+      height: '18px',
+      borderRadius: '50%',
+      background: '#fff',
+      boxShadow: '0 1px 3px rgba(0, 0, 0, 0.3)',
+      transition: 'transform .2s ease'
+    });
+    track.appendChild(thumb);
+
+    const render = () => {
+      track.style.background = input.checked ? '#1e5aa8' : '#ccc';
+      thumb.style.transform = input.checked ? 'translateX(18px)' : 'translateX(0)';
+    };
+    render();
+
+    row.addEventListener('click', () => {
+      input.checked = !input.checked;
+      render();
+      onChange(input.checked);
+    });
+
+    row.appendChild(label);
+    row.appendChild(track);
+    row.appendChild(input);
+    return { element: row, set: (value) => { input.checked = value; render(); } };
+  }
+
+  function createUI() {
+    if (ui.root || window.top !== window) return;
+
+    ui.root = document.createElement('div');
+    ui.root.id = 'uestc-auto-next-ui';
+    Object.assign(ui.root.style, {
+      position: 'fixed',
+      right: '16px',
+      bottom: '16px',
+      zIndex: '2147483647',
+      fontFamily: '"Microsoft YaHei", "PingFang SC", system-ui, sans-serif'
+    });
+
+    const badge = document.createElement('button');
+    badge.type = 'button';
+    Object.assign(badge.style, {
+      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '44px',
+      height: '44px',
+      padding: '0',
+      borderRadius: '50%',
+      background: '#fff',
+      border: '0',
+      boxShadow: '0 2px 10px rgba(0, 0, 0, 0.25)',
+      cursor: 'pointer',
+      marginLeft: 'auto',
+      transition: 'transform .15s ease'
+    });
+    badge.addEventListener('mouseenter', () => { badge.style.transform = 'scale(1.06)'; });
+    badge.addEventListener('mouseleave', () => { badge.style.transform = 'scale(1)'; });
+
+    const logo = document.createElement('img');
+    logo.alt = '';
+    logo.src = LOGO_URL;
+    Object.assign(logo.style, {
+      width: '100%',
+      height: '100%',
+      borderRadius: '50%',
+      objectFit: 'cover',
+      display: 'block'
+    });
+    logo.onerror = () => {
+      logo.remove();
+      badge.textContent = 'U';
+      Object.assign(badge.style, { fontSize: '20px', fontWeight: '700', color: '#1e5aa8' });
+    };
+    badge.appendChild(logo);
+
+    ui.dot = document.createElement('span');
+    Object.assign(ui.dot.style, {
+      position: 'absolute',
+      top: '0',
+      right: '0',
+      width: '12px',
+      height: '12px',
+      borderRadius: '50%',
+      border: '2px solid #fff',
+      background: '#4caf50'
+    });
+    badge.appendChild(ui.dot);
+
+    ui.panel = document.createElement('div');
+    Object.assign(ui.panel.style, {
+      position: 'absolute',
+      right: '0',
+      bottom: '52px',
+      width: '260px',
+      background: '#fff',
+      borderRadius: '12px',
+      boxShadow: '0 8px 30px rgba(0, 0, 0, 0.18)',
+      padding: '12px 16px 14px',
+      display: 'none'
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      paddingBottom: '10px',
+      borderBottom: '1px solid #f0f0f0'
+    });
+
+    const headerLogo = document.createElement('img');
+    headerLogo.alt = '';
+    headerLogo.src = LOGO_URL;
+    Object.assign(headerLogo.style, {
+      width: '22px',
+      height: '22px',
+      borderRadius: '50%',
+      objectFit: 'cover'
+    });
+    headerLogo.onerror = () => {
+      headerLogo.remove();
+      const fallback = document.createElement('span');
+      fallback.textContent = 'U';
+      Object.assign(fallback.style, { fontSize: '14px', fontWeight: '700', color: '#1e5aa8' });
+      header.prepend(fallback);
+    };
+
+    const title = document.createElement('span');
+    title.textContent = 'UESTC 课程助手';
+    Object.assign(title.style, { fontSize: '14px', fontWeight: '600', color: '#1e5aa8' });
+
+    header.appendChild(headerLogo);
+    header.appendChild(title);
+    ui.panel.appendChild(header);
+
+    ui.toggles[ENABLED_KEY] = createToggle('自动下一节', enabled, (value) => setEnabled(value));
+    ui.toggles[BG_KEEP_PLAYING_KEY] = createToggle('后台保持播放', bgKeepPlaying, (value) => setBgKeepPlaying(value));
+    ui.toggles[SPEED_LOCK_KEY] = createToggle('锁定二倍速', speedLock, (value) => setSpeedLock(value));
+    ui.panel.appendChild(ui.toggles[ENABLED_KEY].element);
+    ui.panel.appendChild(ui.toggles[BG_KEEP_PLAYING_KEY].element);
+    ui.panel.appendChild(ui.toggles[SPEED_LOCK_KEY].element);
+
+    ui.statusEl = document.createElement('div');
+    Object.assign(ui.statusEl.style, {
+      marginTop: '4px',
+      paddingTop: '10px',
+      borderTop: '1px solid #f0f0f0',
+      fontSize: '12px',
+      color: '#888'
+    });
+    ui.panel.appendChild(ui.statusEl);
+
+    badge.addEventListener('click', (event) => {
+      event.stopPropagation();
+      ui.panel.style.display = ui.panel.style.display === 'none' ? 'block' : 'none';
+    });
+
+    document.addEventListener('click', () => {
+      if (ui.panel) ui.panel.style.display = 'none';
+    });
+
+    ui.root.appendChild(badge);
+    ui.root.appendChild(ui.panel);
+    document.body.appendChild(ui.root);
+  }
+
   function updateStatus(message) {
-    if (window.top !== window) return;
-
-    if (!statusBadge) {
-      statusBadge = document.createElement('button');
-      statusBadge.type = 'button';
-      statusBadge.title = '点击启用或停用自动下一节';
-      Object.assign(statusBadge.style, {
-        position: 'fixed',
-        right: '16px',
-        bottom: '16px',
-        zIndex: '2147483647',
-        padding: '8px 12px',
-        border: '0',
-        borderRadius: '6px',
-        color: '#fff',
-        fontSize: '13px',
-        cursor: 'pointer',
-        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
-      });
-      statusBadge.addEventListener('click', () => setEnabled(!enabled, true));
-      document.body.appendChild(statusBadge);
-    }
-
-    statusBadge.textContent = `自动下一节：${message}`;
-    statusBadge.style.background = enabled
-      ? 'rgba(20, 120, 70, 0.92)'
-      : 'rgba(110, 110, 110, 0.92)';
+    createUI();
+    if (!ui.statusEl) return;
+    ui.statusEl.textContent = `状态：${message}`;
+    if (ui.dot) ui.dot.style.background = enabled ? '#4caf50' : '#9e9e9e';
   }
 
   function setEnabled(value, showAlert = false) {
     enabled = value;
     GM_setValue(ENABLED_KEY, enabled);
+    if (ui.toggles[ENABLED_KEY]) ui.toggles[ENABLED_KEY].set(enabled);
     updateStatus(enabled ? '等待视频' : '已停用');
     log(enabled ? '已启用。' : '已停用。');
     if (showAlert) window.alert(`自动下一节：${enabled ? '已启用' : '已停用'}`);
     if (enabled) scanForVideos();
+  }
+
+  function setBgKeepPlaying(value) {
+    bgKeepPlaying = value;
+    GM_setValue(BG_KEEP_PLAYING_KEY, bgKeepPlaying);
+    if (ui.toggles[BG_KEEP_PLAYING_KEY]) ui.toggles[BG_KEEP_PLAYING_KEY].set(bgKeepPlaying);
+    log(bgKeepPlaying ? '后台保持播放已开启。' : '后台保持播放已关闭。');
+  }
+
+  function setSpeedLock(value) {
+    speedLock = value;
+    GM_setValue(SPEED_LOCK_KEY, speedLock);
+    if (ui.toggles[SPEED_LOCK_KEY]) ui.toggles[SPEED_LOCK_KEY].set(speedLock);
+    if (speedLock) document.querySelectorAll('video').forEach(enforceSpeedLock);
+    log(speedLock ? '锁定二倍速已开启。' : '锁定二倍速已关闭。');
+  }
+
+  function enforceSpeedLock(video) {
+    if (!speedLock) return;
+    if (Math.abs(video.playbackRate - LOCKED_PLAYBACK_RATE) > 0.01) {
+      video.playbackRate = LOCKED_PLAYBACK_RATE;
+    }
   }
 
   function installBackgroundKeepPlaying() {
@@ -438,6 +647,9 @@
     if (boundVideos.has(video)) return;
     boundVideos.add(video);
     video.addEventListener('ended', () => notifyVideoEnded(video), { passive: true });
+    video.addEventListener('ratechange', () => enforceSpeedLock(video), { passive: true });
+    video.addEventListener('play', () => enforceSpeedLock(video), { passive: true });
+    enforceSpeedLock(video);
     log('已监听课程视频。', video);
     updateStatus(enabled ? '监听中' : '已停用');
   }
@@ -460,10 +672,13 @@
   });
 
   GM_registerMenuCommand('切换“后台保持播放”', () => {
-    bgKeepPlaying = !bgKeepPlaying;
-    GM_setValue(BG_KEEP_PLAYING_KEY, bgKeepPlaying);
+    setBgKeepPlaying(!bgKeepPlaying);
     window.alert(`后台保持播放：${bgKeepPlaying ? '已开启' : '已关闭'}`);
-    log(bgKeepPlaying ? '后台保持播放已开启。' : '后台保持播放已关闭。');
+  });
+
+  GM_registerMenuCommand('切换“锁定二倍速”', () => {
+    setSpeedLock(!speedLock);
+    window.alert(`锁定二倍速：${speedLock ? '已开启' : '已关闭'}`);
   });
 
   if (window.top === window) {
@@ -475,10 +690,12 @@
     });
   }
 
+  createUI();
   installBackgroundKeepPlaying();
   scanForVideos();
   observer.observe(document.documentElement, { childList: true, subtree: true });
   log(enabled ? '脚本已启用。' : '脚本当前为停用状态。');
   log(bgKeepPlaying ? '后台保持播放已开启。' : '后台保持播放已关闭。');
+  log(speedLock ? '锁定二倍速已开启。' : '锁定二倍速已关闭。');
   updateStatus(enabled ? '等待视频' : '已停用');
 })();
