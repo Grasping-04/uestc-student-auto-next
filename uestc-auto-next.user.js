@@ -1,8 +1,10 @@
 // ==UserScript==
 // @name         UESTC 自动点击下一节
 // @namespace    local.uestc.learning-helper
-// @version      0.8.0
+// @version      0.8.1
 // @description  视频真实播放结束后，自动进入并尝试播放下一课件。
+// @icon         https://cdn.jsdelivr.net/gh/Grasping-04/uestc-student-auto-next@main/university-of-electronic-science-and-technology-of-china-logo-1024px.png
+// @icon64       https://cdn.jsdelivr.net/gh/Grasping-04/uestc-student-auto-next@main/university-of-electronic-science-and-technology-of-china-logo-1024px.png
 // @match        https://resource.uestc.edu.cn/*
 // @run-at       document-idle
 // @license      MIT
