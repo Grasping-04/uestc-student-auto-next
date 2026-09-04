@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         UESTC 自动点击下一节
 // @namespace    local.uestc.learning-helper
-// @version      0.7.0
+// @version      0.7.1
 // @description  视频真实播放结束后，自动进入并尝试播放下一课件。
 // @match        https://resource.uestc.edu.cn/*
 // @run-at       document-idle
