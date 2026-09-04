@@ -1,5 +1,9 @@
 # UESTC 课程自动下一节助手
 
+[![GreasyFork 版本](https://img.shields.io/greasyfork/v/594234?label=GreasyFork%20版本)](https://greasyfork.org/zh-CN/scripts/594234)
+[![GreasyFork 安装量](https://img.shields.io/greasyfork/d/594234?label=安装量)](https://greasyfork.org/zh-CN/scripts/594234)
+[![MIT License](https://img.shields.io/greasyfork/l/594234?label=License)](uestc-auto-next.user.js)
+
 适用于电子科技大学教学资源管理平台的 Tampermonkey 用户脚本。
 
 脚本会监听当前课程视频，并在视频正常播放结束后尝试进入下一课件。它适合减少重复点击操作，不会代替用户完成测验、作业或其他课程活动。
@@ -90,21 +94,6 @@
 - 仅处理视频结束后的课件切换，不会自动完成文档、测验、作业、考试或弹窗确认。
 - 到达课程最后一项后不会继续跳转。
 - 平台更新页面结构后，自动切换功能可能需要重新适配。
-
-## 可选：使用 DeskPins 保持窗口可见
-
-脚本默认已阻止平台在页面进入后台时暂停视频。若“后台保持播放”被关闭，或平台对前台状态有更严格的检测，仍可尝试使用 Windows 上的 DeskPins 将课程窗口置顶：
-
-1. 将课程页面单独打开在一个浏览器窗口中。
-2. 启动 DeskPins。
-3. 选择 DeskPins 的图钉工具，然后点击课程窗口。
-4. 调整课程窗口大小，确保视频区域保持可见。
-5. 不要最小化课程窗口，也不要在该窗口中切换到其他标签页。
-
-DeskPins 只能帮助窗口保持置顶，无法保证兼容平台的所有前台检测方式。请从可信来源获取软件，并遵守平台和课程的使用要求。
-下载地址：https://efotinis.neocities.org/deskpins/
-
-![使用deskpin后效果](DeskPin_show.png)
 
 ## 维护（脚本更新流程）
 
