@@ -1,10 +1,14 @@
 // ==UserScript==
 // @name         UESTC 自动点击下一节
 // @namespace    local.uestc.learning-helper
-// @version      0.6.0
+// @version      0.7.0
 // @description  视频真实播放结束后，自动进入并尝试播放下一课件。
 // @match        https://resource.uestc.edu.cn/*
 // @run-at       document-idle
+// @license      MIT
+// @homepageURL  https://github.com/Grasping-04/uestc-student-auto-next
+// @source       https://github.com/Grasping-04/uestc-student-auto-next
+// @supportURL   https://github.com/Grasping-04/uestc-student-auto-next/issues
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
@@ -16,6 +20,7 @@
 
   const LOG_PREFIX = '[UESTC Auto Next]';
   const ENABLED_KEY = 'uestc_auto_next_enabled';
+  const BG_KEEP_PLAYING_KEY = 'uestc_bg_keep_playing';
   const NAVIGATION_DELAY_MS = 1500;
   const AUTO_PLAY_TIMEOUT_MS = 15000;
   const VIDEO_ENDED_MESSAGE = 'UESTC_AUTO_NEXT_VIDEO_ENDED';
@@ -72,14 +77,17 @@
   ];
 
   let enabled = GM_getValue(ENABLED_KEY, true);
+  let bgKeepPlaying = GM_getValue(BG_KEEP_PLAYING_KEY, true);
   let navigationPending = false;
   let autoPlayPending = false;
+  let manualPlayNeeded = false;
   let autoPlayTimer = null;
   let autoPlayAttemptRunning = false;
   let lastEndedVideo = null;
   let lastEndedSrc = '';
   let statusBadge = null;
   const boundVideos = new WeakSet();
+  const videosPlayingWhenHidden = new Set();
 
   const log = (...args) => console.info(LOG_PREFIX, ...args);
 
@@ -120,6 +128,50 @@
     log(enabled ? '已启用。' : '已停用。');
     if (showAlert) window.alert(`自动下一节：${enabled ? '已启用' : '已停用'}`);
     if (enabled) scanForVideos();
+  }
+
+  function installBackgroundKeepPlaying() {
+    const originalPause = HTMLMediaElement.prototype.pause;
+    HTMLMediaElement.prototype.pause = function () {
+      if (bgKeepPlaying && document.hidden) {
+        log('页面在后台，忽略播放器的暂停请求。');
+        return;
+      }
+      return originalPause.call(this);
+    };
+
+    const onBackgroundEvent = (event) => {
+      if (!bgKeepPlaying) return;
+      if (document.hidden) {
+        videosPlayingWhenHidden.clear();
+        for (const video of document.querySelectorAll('video')) {
+          if (!video.paused && !video.ended) videosPlayingWhenHidden.add(video);
+        }
+      } else {
+        for (const video of [...videosPlayingWhenHidden]) {
+          if (!video.ended && video.paused) {
+            video.play().catch((error) =>
+              console.warn(LOG_PREFIX, '回到前台后自动恢复播放失败。', error)
+            );
+          }
+        }
+        videosPlayingWhenHidden.clear();
+        if (manualPlayNeeded) {
+          const alreadyPlaying = [...document.querySelectorAll('video')].some(
+            (video) => !video.paused && !video.ended
+          );
+          if (alreadyPlaying) {
+            manualPlayNeeded = false;
+          } else {
+            startAutoPlaySearch();
+          }
+        }
+      }
+      event.stopImmediatePropagation();
+    };
+
+    window.addEventListener('visibilitychange', onBackgroundEvent, true);
+    window.addEventListener('blur', onBackgroundEvent, true);
   }
 
   function isVisible(element) {
@@ -285,6 +337,7 @@
   function startAutoPlaySearch() {
     stopAutoPlaySearch();
     autoPlayPending = true;
+    manualPlayNeeded = false;
     updateStatus('等待新视频');
     const startedAt = Date.now();
 
@@ -322,6 +375,7 @@
         } catch (error) {
           stopAutoPlaySearch();
           autoPlayPending = false;
+          manualPlayNeeded = true;
           updateStatus('请手动播放');
           console.warn(LOG_PREFIX, '浏览器阻止了下一课件自动播放。', error);
         }
@@ -405,6 +459,13 @@
     setEnabled(!enabled, true);
   });
 
+  GM_registerMenuCommand('切换“后台保持播放”', () => {
+    bgKeepPlaying = !bgKeepPlaying;
+    GM_setValue(BG_KEEP_PLAYING_KEY, bgKeepPlaying);
+    window.alert(`后台保持播放：${bgKeepPlaying ? '已开启' : '已关闭'}`);
+    log(bgKeepPlaying ? '后台保持播放已开启。' : '后台保持播放已关闭。');
+  });
+
   if (window.top === window) {
     window.addEventListener('message', (event) => {
       if (event.origin !== location.origin || event.data?.type !== VIDEO_ENDED_MESSAGE) return;
@@ -414,8 +475,10 @@
     });
   }
 
+  installBackgroundKeepPlaying();
   scanForVideos();
   observer.observe(document.documentElement, { childList: true, subtree: true });
   log(enabled ? '脚本已启用。' : '脚本当前为停用状态。');
+  log(bgKeepPlaying ? '后台保持播放已开启。' : '后台保持播放已关闭。');
   updateStatus(enabled ? '等待视频' : '已停用');
 })();
